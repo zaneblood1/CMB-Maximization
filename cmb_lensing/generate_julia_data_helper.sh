@@ -16,5 +16,5 @@ conda activate myenv
 #call the julia script to generate the load_sim() data using the slurm array task id as the seed
 #copy the master Project.toml into a temporary folder with the current process ID pass the ID as an argument
 #to the julia code call below and have it activate its own Project.toml
-julia /resnick/groups/wugroup/zblood/cmb_lensing_reorganized/generate_julia_data_bash.jl --map_size $1 --seed $2
+julia /resnick/groups/wugroup/zblood/cmb_lensing/generate_julia_data_bash.jl --map_size $1 --seed $2
 #once the julia code is finished running, delete the temporary directory...

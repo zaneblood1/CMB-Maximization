@@ -4,7 +4,7 @@ import shutil
 
 #remove the results directory if already there and add a clean new one
 #otherwise, just add a clean new dir
-results_path = "/home/zane-blood/Desktop/cmb_lensing_reorganized/performance_results"
+results_path = "/home/zane-blood/Desktop/cmb_lensing/performance_results"
 if os.path.exists(results_path):
     shutil.rmtree(results_path)
 os.makedirs(results_path, exist_ok = True)

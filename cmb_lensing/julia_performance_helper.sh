@@ -13,4 +13,4 @@ conda init
 #activate your own specific conda
 conda activate myenv
 #call the julia performance timing script for a specific (f, phi) combo and a specific trial number
-julia /resnick/groups/wugroup/zblood/cmb_lensing_reorganized/performance_test.jl --map_size $1 --seed $2 --trial $3
+julia /resnick/groups/wugroup/zblood/cmb_lensing/performance_test.jl --map_size $1 --seed $2 --trial $3
