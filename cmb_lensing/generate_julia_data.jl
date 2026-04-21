@@ -14,14 +14,15 @@ println("\nrunning simulation...\n")
     T         = Float64,
     pol       = :I, #change this to temperature rather than polarization for the time being
     μKarcminT = 1,
-    L         = LenseFlow(10)
+    L         = LenseFlow(10),
+    seed = 1
     # seed      = 0, #Keep these commented out for the time being....
     # pixel_mask_kwargs = (edge_padding_deg=1, apodization_deg=0, num_ptsrcs=0),
     # bandpass_mask     = LowPass(5000)
 )
 
 #write the necessary Julia data to storage in a folder in the project directory
-cwd = pwd()
+cwd = pwd() * "/cmb_lensing/"
 file_path = cwd * "/julia_ground_truth_data/"
 
 #store all the necesary arrays and fields

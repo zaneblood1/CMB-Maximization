@@ -1,19 +1,15 @@
 from imports import *
 from functions import *
 from constants import *
-from juliacall import Main as julia
-from juliacall import Pkg
-
-#TODO 1. implement my own auto and cross - correlation functions
-#2. Implement a function which calls load_sim many times to get multiple auto-spectra
-#and then average the auto-spectra from Python and compare to those of Julia (should use multi-threading)
-#3. Plot those using Kimmy's analysis formula
-#4. If all goes well start working on polarizations? 
+# from juliacall import Main as julia
+# from juliacall import Pkg
+from jax import config
+#config.update("jax_disable_jit", True)
 
 #NOTE for the time being I would only recommend running this with the default params...
 #noise level, theta_pix, N, seed, and lmax could all be changed comfortably but more
 #validation needs to be done before other params can be set
-def load_sim(N, theta_pix, seed = None, uk_arcmin_t = 3, H0 = None, 
+def load_sim(N, theta_pix, master_seed = None, uk_arcmin_t = 3, H0 = None, 
             ombh2 = 0.0224567, 
             omch2 = 0.118489, 
             cosmomc_theta = 0.0104098,
@@ -40,11 +36,11 @@ def load_sim(N, theta_pix, seed = None, uk_arcmin_t = 3, H0 = None,
         cosmomc_theta = cosmomc_theta,
         r = r,
         mnu = mnu, 
-        tau = tau, 
         As = As,
         nt = nt, 
         ns = ns,
         lmax = lmax_prime,
+        tau = tau, 
         pivot_scalar = k_pivot,
         pivot_tensor = k_pivot,
         Alens = Alens)
@@ -64,11 +60,32 @@ def load_sim(N, theta_pix, seed = None, uk_arcmin_t = 3, H0 = None,
 
     #temperature Dl's
     dl_tt_scalar = jnp.asarray(power_spectra["unlensed_scalar"][:,0])
+    dl_te_scalar = jnp.asarray(power_spectra["unlensed_scalar"][:,3])
+    dl_ee_scalar = jnp.asarray(power_spectra["unlensed_scalar"][:,1])
+    dl_bb_scalar = jnp.asarray(power_spectra["unlensed_scalar"][:,2])
+
     dl_tt_tensor = jnp.asarray(power_spectra["tensor"][:,0])
+    dl_te_tensor = jnp.asarray(power_spectra["tensor"][:,3])
+    dl_ee_tensor = jnp.asarray(power_spectra["tensor"][:,1])
+    dl_bb_tensor = jnp.asarray(power_spectra["tensor"][:,2])
+
     dl_tt_total = jnp.asarray(power_spectra["total"][:,0])
+    dl_ee_total = jnp.asarray(power_spectra["total"][:,1])
+    dl_bb_total = jnp.asarray(power_spectra["total"][:,2])
+
     cl_tt_scalar = dl2cl(dl_tt_scalar, lmax, lmax_prime)
+    cl_te_scalar = dl2cl(dl_te_scalar, lmax, lmax_prime)
+    cl_ee_scalar = dl2cl(dl_ee_scalar, lmax, lmax_prime)
+    cl_bb_scalar = dl2cl(dl_bb_scalar, lmax, lmax_prime)
+
     cl_tt_tensor = dl2cl(dl_tt_tensor, lmax, lmax_prime)
+    cl_te_tensor = dl2cl(dl_te_tensor, lmax, lmax_prime)
+    cl_ee_tensor = dl2cl(dl_ee_tensor, lmax, lmax_prime)
+    cl_bb_tensor = dl2cl(dl_bb_tensor, lmax, lmax_prime)
+
     cl_tt_total = dl2cl(dl_tt_total, lmax, lmax_prime)
+    cl_ee_total = dl2cl(dl_ee_total, lmax, lmax_prime)
+    cl_bb_total = dl2cl(dl_bb_total, lmax, lmax_prime)
 
     #lensing potential Dl's
     dl_pp = jnp.asarray(results.get_lens_potential_cls(lmax = lmax_prime - 1)[:,0])
@@ -76,73 +93,145 @@ def load_sim(N, theta_pix, seed = None, uk_arcmin_t = 3, H0 = None,
 
     #compute a meshgrid of fourier modes and also
     #return the pixel width in radians
-    ls, d = gen_fourier_grid(N, theta_pix)
+    ls, d = gen_fourier_grid(jnp.zeros((N,N//2+1)), theta_pix)
 
     #calculate the noise Cl's
-    cl_n = noise_cls(lmax_prime, uk_arcmin_t)
+    noise_cls_tt, noise_cls_te, noise_cls_ee, noise_cls_bb = noise_cls(lmax_prime, uk_arcmin_t)
+
+    #TODO use the following style of code to re-write the RNG code parts in the simulation method
+    #Convert the integer seed to a JAX PRNGKey
+    KEY = jax.random.PRNGKey(master_seed)
+    #Split the key into N independent sub-keys
+    KEYS = jax.random.split(KEY, 100)
 
     #given the Cl's from each type of field,
     #generate these fields using Gaussian statistics
     ell = jnp.arange(2, lmax).astype(jnp.float64)
     cphi = covar_matrix_from_cls(N, d, ls, ell, cl_pp, origin_value = 0)
-    phi = field_from_covar(N, cphi, seed)
+    phi = field_from_covar(N, cphi, KEYS[0])
 
     #the cf covariance matrix is the sum of the tensor and scalar matrices
-    cf_scalar = covar_matrix_from_cls(N, d, ls, ell, cl_tt_scalar, origin_value = 0)
-    cf_tensor = covar_matrix_from_cls(N, d, ls, ell, cl_tt_tensor, origin_value = 0)
-    cf = cf_scalar + cf_tensor
+    cf_tt_scalar = covar_matrix_from_cls(N, d, ls, ell, cl_tt_scalar, origin_value = 0)
+    cf_tt_tensor = covar_matrix_from_cls(N, d, ls, ell, cl_tt_tensor, origin_value = 0)
+    cf_te_scalar = covar_matrix_from_cls(N, d, ls, ell, cl_te_scalar, origin_value = 0)
+    cf_te_tensor = covar_matrix_from_cls(N, d, ls, ell, cl_te_tensor, origin_value = 0)
+    cf_ee_scalar = covar_matrix_from_cls(N, d, ls, ell, cl_ee_scalar, origin_value = 0)
+    cf_ee_tensor = covar_matrix_from_cls(N, d, ls, ell, cl_ee_tensor, origin_value = 0)
+    cf_bb_scalar = covar_matrix_from_cls(N, d, ls, ell, cl_bb_scalar, origin_value = 0)
+    cf_bb_tensor = covar_matrix_from_cls(N, d, ls, ell, cl_bb_tensor, origin_value = 0)
+    cf_tt = cf_tt_scalar + cf_tt_tensor
+    cf_te = cf_te_scalar + cf_te_tensor
+    cf_ee = cf_ee_scalar + cf_ee_tensor
+    cf_bb = cf_bb_scalar + cf_bb_tensor
     #the lensed cf i.e. "cfl" is also needed for the quadratic estimate
-    cfl = covar_matrix_from_cls(N, d, ls, ell, cl_tt_total, origin_value = 0)
-    unlensed_temp = field_from_covar(N, cf, seed)
+    cfl_tt = covar_matrix_from_cls(N, d, ls, ell, cl_tt_total, origin_value = 0)
+    cfl_ee = covar_matrix_from_cls(N, d, ls, ell, cl_ee_total, origin_value = 0)
+    cfl_bb = covar_matrix_from_cls(N, d, ls, ell, cl_bb_total, origin_value = 0)
+    unlensed_temp_i = field_from_covar(N, cf_tt, KEYS[1])
+    unlensed_temp_e = field_from_covar(N, cf_ee, KEYS[2])
+    unlensed_temp_b = field_from_covar(N, cf_bb, KEYS[3])
     #the lensed field is just found by lensing the unlensed field
-    lensed_temp = lense_flow(unlensed_temp, phi, d, 10, 1, False, N*N, False)
+    pix_width = jnp.deg2rad(theta_pix / ARCMIN_PER_DEGREE)
+    lensed_temp_i, lensed_temp_e, lensed_temp_b = lense_ieb(unlensed_temp_i, unlensed_temp_e, 
+                                                  unlensed_temp_b, phi, pix_width, N, theta_pix)
 
     #compute the mask and beam which are needed to simulate the data field
     l_cutoff = 3000
-    m = get_mask(l_cutoff, N, d, ls)
-    b = get_beam(N, d, ls, lmax_prime)
+    m_tt = get_mask(l_cutoff, N, d, ls)
+    m_te = jnp.zeros(m_tt.shape)
+    m_ee = m_tt
+    m_bb = m_tt
+
+    b_tt = get_beam(N, d, ls, lmax_prime)
+    b_te = jnp.zeros(b_tt.shape)
+    b_ee = b_tt
+    b_bb = b_tt
 
     #the data field is M * B * L * f + n where n ~ N(0, Cn) i.e. "white noise"
     ell_prime = jnp.arange(2, lmax_prime)
-    cn = covar_matrix_from_cls(N, d, ls, ell_prime, cl_n, origin_value = 0)
+    cn_tt = covar_matrix_from_cls(N, d, ls, ell_prime, noise_cls_tt, origin_value = 0)
+    cn_te = covar_matrix_from_cls(N, d, ls, ell_prime, noise_cls_te, origin_value = 0)
+    cn_ee = covar_matrix_from_cls(N, d, ls, ell_prime, noise_cls_ee, origin_value = 0)
+    cn_bb = covar_matrix_from_cls(N, d, ls, ell_prime, noise_cls_bb, origin_value = 0)
     #NOTE the sum of seeds below is necessary to get rid of possible possible correlations
     #between lensed_temp and white noise... In fact, I should probably re-write
     #the whole seed generating code to start with a given seed and then continuosly
     #update itself for the next seed method
-    white_noise = field_from_covar(N, cn, seed + np.random.randint(0, 2**31))
-    sum_total = jfft.irfft2(m * b * jfft.rfft2(lensed_temp))
-    data = sum_total + white_noise
+    white_noise_tt = field_from_covar(N, cn_tt, KEYS[4])
+    white_noise_ee = field_from_covar(N, cn_ee, KEYS[5])
+    white_noise_bb = field_from_covar(N, cn_bb, KEYS[6])
+
+    #find the [I, E, B] matrix product MB_[I, E, B] of Mask_[I, E, B] x Beam_[I, E, B]
+    #now take the result and find the resulting matrix vector product given by
+    #result_[I, E, B] = MB_[I, E, B] x lensed_field_[I, E, B]... However, these matrices
+    #are diagonal so it is actually just term by term
+    sum_total_i = jfft.irfft2(m_tt * b_tt * jfft.rfft2(lensed_temp_i))
+    sum_total_e = jfft.irfft2(m_ee * b_ee * jfft.rfft2(lensed_temp_e))
+    sum_total_b = jfft.irfft2(m_bb * b_bb * jfft.rfft2(lensed_temp_b))
+    data_i = sum_total_i + white_noise_tt
+    data_e = sum_total_e + white_noise_ee
+    data_b = sum_total_b + white_noise_bb
 
     #the D matrix is used in mixing and map estimation...
-    d_matrix = get_d_matrix(cf, cn)
+    d_matrix_tt, d_matrix_te, d_matrix_ee, d_matrix_bb = \
+        get_d_matrix(cf_tt, cf_te, cf_ee, cf_bb, 
+                     cn_tt, cn_te, cn_ee, cn_bb)
 
     #NOTE this seems to be working for the most part... I.e. comparing Nphi
     #from julia and python directly gives huge percent difference because of numerical precision?
     #But... We only ever use Nphi^-1 which is a lot close (~ 0.02% difference) and in practice
     #this is added to Cphi^-1 so the quantity we really care about is hessian = Cphi^-1 + Nphi^-1
     #and the error here is on the order of ~ 1e-5
-    nphi = quadratic_estimate(cn, cf, cfl, m, b, d) / nphi_fac
+    #nphi = quadratic_estimate(cn, cf, cfl, m, b, d) / nphi_fac #NOTE uncomment for TT Nphi
+    nphi = quadratic_estimate_v2(cf_ee, cf_bb, cfl_ee, cfl_bb, cn_ee, cn_bb, m_ee, m_bb, b_ee, b_bb, pix_width) / nphi_fac
 
     #MAP estimate doesn't use G so set it to 1 for the time being
-    g = jnp.ones(d_matrix.shape)
+    g = jnp.ones(d_matrix_tt.shape)
 
     #return all the generated fiels and their covariance matrices...
     results = {}
-    results["data"] = data
-    results["lensed_temp"] = lensed_temp
-    results["unlensed_temp"] = unlensed_temp
-    results["phi"] = phi
-    results["cn"] = cn
-    results["cf"] = cf
-    results["cfl"] = cfl
-    results["cphi"] = cphi
-    results["m"] = m
-    results["b"] = b
-    results["d"] = d_matrix
-    results["g"] = g
+    results["cfl_tt"] = cfl_tt
+    results["cfl_ee"] = cfl_ee
+    results["cfl_bb"] = cfl_bb
     results["nphi"] = nphi
-    results["white_noise"] = white_noise
-    results["sum_total"] = sum_total
+    results["unlensed_temp_i"] = unlensed_temp_i
+    results["unlensed_temp_e"] = unlensed_temp_e
+    results["unlensed_temp_b"] = unlensed_temp_b
+    results["phi"] = phi
+    results["cn_tt"] = cn_tt
+    results["cn_te"] = cn_te
+    results["cn_ee"] = cn_ee
+    results["cn_bb"] = cn_bb
+    results["cf_tt"] = cf_tt
+    results["cf_te"] = cf_te
+    results["cf_ee"] = cf_ee
+    results["cf_bb"] = cf_bb
+    results["cphi"] = cphi
+    results["m_tt"] = m_tt
+    results["m_te"] = m_te
+    results["m_ee"] = m_ee
+    results["m_bb"] = m_bb
+    results["b_tt"] = b_tt
+    results["b_te"] = b_te
+    results["b_ee"] = b_ee
+    results["b_bb"] = b_bb
+    results["d_tt"] = d_matrix_tt
+    results["d_te"] = d_matrix_te
+    results["d_ee"] = d_matrix_ee
+    results["d_bb"] = d_matrix_bb
+    results["g"] = g
+    results["white_noise_i"] = white_noise_tt
+    results["white_noise_e"] = white_noise_ee
+    results["white_noise_b"] = white_noise_bb
+    results["lensed_temp_i"] = lensed_temp_i
+    results["lensed_temp_e"] = lensed_temp_e
+    results["lensed_temp_b"] = lensed_temp_b
+    results["sum_total_i"] = sum_total_i
+    results["sum_total_e"] = sum_total_e
+    results["sum_total_b"] = sum_total_b
+    results["data_i"] = data_i
+    results["data_e"] = data_e
+    results["data_b"] = data_b
     return results
 
 #TODO use the following style of code to re-write the RNG code parts in the simulation method
@@ -164,12 +253,70 @@ def quadratic_estimate(cn, cf, cfl, m, b, pix_width):
     #(0, 0) --> d^2/dx^2
     #(0, 1) = (1, 0) --> d^2/dxdy
     #(1, 1) --> d^2/dy^2
-    for (type_1, type_2) in [(0, 0), (1, 1), (0, 1), (1, 0)]: #, (0, 1), (1, 0), (1, 1)]:
+    for (type_1, type_2) in [(0, 0), (1, 1), (0, 1), (1, 0)]:
         qe_norm_at_position = get_qe_norm_at_position(tf, ct, sigma_temp_total, pix_width, type_1, type_2)
         qe_norm_at_position = get_specific_derivative(qe_norm_at_position, pix_width, type_1, type_2)
         qe_sum += abs(qe_norm_at_position)
 
     return jnp.nan_to_num(1 / qe_sum, nan = 0, posinf = 0, neginf = 0)
+
+@partial(jax.jit, static_argnums = (0,))
+def get_indices(length):
+    parts = [unique_permutations(num_0s, length - num_0s) for num_0s in range(length + 1)]
+    return jnp.concatenate(parts, axis = 0)
+
+@partial(jax.jit, static_argnums = (0, 1))
+def unique_permutations(n0, n1):
+    total_length = n0 + n1
+    res = []
+    for indices in combinations(range(total_length), n0):
+        p = [1] * total_length
+        for i in indices:
+            p[i] = 0
+        res.append(p)
+    return jnp.array(res, dtype = jnp.int32).reshape(-1, total_length)
+
+@jax.jit
+def quadratic_estimate_v2(cf_ee, cf_bb, cfl_ee, cfl_bb, cn_ee, cn_bb, mask_ee, mask_bb, beam_ee, beam_bb, pix_width):
+
+    qe_sum = jnp.zeros(cf_ee.shape, dtype = jnp.complex128)
+
+    for (i, j) in get_indices(2):
+
+        internal = quadratic_estimate_internal(cf_ee, cf_bb, cfl_ee, cfl_bb, 
+                                               cn_ee, cn_bb, mask_ee, mask_bb, 
+                                               beam_ee, beam_bb, pix_width, i, j)
+        qe_sum += jnp.abs(get_specific_derivative(jfft.rfft2(internal), pix_width, i, j))
+
+    return jnp.nan_to_num(1 / qe_sum, nan = 0, posinf = 0, neginf = 0)
+
+@jax.jit
+def quadratic_estimate_internal(cf_ee, cf_bb, cfl_ee, cfl_bb, cn_ee, cn_bb, mask_ee, mask_bb, beam_ee, beam_bb, pix_width, i, j):
+
+    epsilon = levi_civita_3d()
+    tf2e = (mask_ee * beam_ee)**2
+    tf2b = (mask_bb * beam_bb)**2
+    sigma_e_tot = tf2e * cfl_ee + cn_ee
+    sigma_b_tot = tf2b * cfl_bb + cn_bb
+    N, _ = cf_ee.shape
+    qe_sum = np.zeros((N, N), dtype = jnp.float64)
+
+    for (k, l, m, n, p, q) in get_indices(6):
+
+        qe_sum += 4 * epsilon[m, p, 2] * epsilon[n, q, 2] \
+                    * get_qe_norm_at_position_v2(tf2e, cf_ee, sigma_e_tot, 
+                                                 tf2b, cf_bb, sigma_b_tot, 
+                                                 pix_width, i, j, k, l, m, n, p, q)
+    return qe_sum
+
+def get_qe_norm_at_position_v2(tf2e, cf_ee, sigma_e_tot, tf2b, cf_bb, sigma_b_tot, pix_width, i, j, k, l, m, n, p, q):
+    result = jfft.irfft2(qe_leg_v2(tf2e * cf_ee**2 / sigma_e_tot, pix_width, {"encapsulated": jnp.array([i, j]), "isolated": jnp.array([k, l, m, n])})) \
+             * jfft.irfft2(qe_leg_v2(tf2b / sigma_b_tot, pix_width, {"encapsulated": jnp.array([]), "isolated": jnp.array([k, l, p, q])})) \
+             - 2*jfft.irfft2(qe_leg_v2(tf2e * cf_ee / sigma_e_tot, pix_width, {"encapsulated": jnp.array([i]), "isolated": jnp.array([k, l, m, n])})) \
+             * jfft.irfft2(qe_leg_v2(tf2b * cf_bb / sigma_b_tot, pix_width, {"encapsulated": jnp.array([j]), "isolated": jnp.array([k, l, p, q])})) \
+             + jfft.irfft2(qe_leg_v2(tf2e / sigma_e_tot, pix_width, {"encapsulated": jnp.array([]), "isolated": jnp.array([k, l, m, n])})) \
+             * jfft.irfft2(qe_leg_v2(tf2b * cf_bb**2 / sigma_b_tot, pix_width, {"encapsulated": jnp.array([i, j]), "isolated": jnp.array([k, l, p, q])}))
+    return result
 
 def get_qe_norm_at_position(tf, ct, sigma_temp_total, pix_width, type_1, type_2):
     result = jfft.irfft2(qe_leg(tf**2*ct**2/sigma_temp_total, pix_width, type_1, type_2))*jfft.irfft2(qe_leg(tf**2/sigma_temp_total, pix_width)) \
@@ -194,15 +341,67 @@ def qe_leg(field, pix_width, type_1 = None, type_2 = None):
     qe_leg_value = get_specific_derivative(field, pix_width, type_1, type_2)
     return jnp.nan_to_num(qe_leg_value, nan = 0)
 
+@jax.jit
+def qe_leg_internal(field, pix_width, num_derivatives, num_x, num_y):
+
+    #start by converting nan to 0 in case we quit early and 
+    #just return the field
+    field = jnp.nan_to_num(field, nan = 0)
+
+    #for zero derivatives just return the field
+    def quit_early(field, pix_width, num_derivatives, num_x, num_y):
+        _ = pix_width #quiet the linter...
+        _ = num_derivatives
+        _ = num_x
+        _ = num_y
+        return field * (1.0 + 0.0j)
+    
+    def take_partials(field, pix_width, num_derivatives, num_x, num_y):
+        #compute the laplacian raised to the n/2 power
+        laplacian_power = jnp.sqrt(laplacian_2d(field, pix_width)**num_derivatives)
+        
+        #compute the specific derivative term
+        N, _ = field.shape
+        kx = 2 * jnp.pi * jfft.fftfreq(N, pix_width)
+        ky = 2 * jnp.pi * jfft.rfftfreq(N, pix_width)
+        KX, KY = jnp.meshgrid(kx, ky, indexing="ij")
+        x_deriv  = 1j * KX
+        y_deriv  = 1j * KY
+        qe_leg_value = (x_deriv**num_x * y_deriv**num_y) * field
+        qe_leg_value = qe_leg_value / laplacian_power
+
+        #gracefully handle any NaNs
+        return jnp.nan_to_num(qe_leg_value, nan = 0)
+    
+    operands = field, pix_width, num_derivatives, num_x, num_y
+    result = jax.lax.cond(
+        jnp.equal(num_derivatives, 0),
+        quit_early,
+        take_partials,
+        *operands
+    )
+
+    return result
+
+@jax.jit
+def qe_leg_v2(field, pix_width, indices):
+    num_derivatives = len(indices["isolated"])
+    squashed_indices = jnp.concatenate((indices["encapsulated"], indices["isolated"]), axis = 0)
+    num_y = jnp.sum(squashed_indices)
+    num_x = len(squashed_indices) - num_y
+    return qe_leg_internal(field, pix_width, num_derivatives, num_x, num_y)
+
+@jax.jit
 def laplacian_2d(field, pix_width):
     Nx, _ = field.shape
     Ny = Nx
     kx = 2 * jnp.pi * jfft.fftfreq(Nx, pix_width)
     ky = 2 * jnp.pi * jfft.rfftfreq(Ny, pix_width)
     KX, KY = jnp.meshgrid(kx, ky, indexing="ij")
-    laplacian = -KX**2-KY**2
+    laplacian = KX**2 + KY**2
     return laplacian
 
+@jax.jit
 def get_specific_derivative(field, pix_width, type_1 = None, type_2 = None):
 
     #0th order derivative of a field is the field
@@ -212,18 +411,36 @@ def get_specific_derivative(field, pix_width, type_1 = None, type_2 = None):
     #derivative calculations should be done in fourier space
     #for this specific QE Lef calculation
     x, y, xx, xy, yy = get_fourier_derivatives(field, pix_width)
-    first_derivatives = [x, y]
-    second_derivatives = [xx, yy, xy]
+    first_derivatives = jnp.array([x, y])
+    second_derivatives = jnp.array([xx, yy, xy])
 
     #1st order derivatives
     if type_2 is None:
         return first_derivatives[type_1]
-    #similar second order derivatives
-    elif type_1 == type_2:
+        
+    # #similar second order derivatives
+    # elif jnp.equal(type_1, type_2):
+    #     return second_derivatives[type_1]
+    # #mixed second order derivatives
+    # else:
+    #     return second_derivatives[2]
+
+    def return_double_2nd_order(second_derivatives, type_1):
         return second_derivatives[type_1]
-    #mixed second order derivatives
-    else:
+    
+    def return_mixed_2nd_order(second_derivatives, type_1):
+        _ = type_1
         return second_derivatives[2]
+
+    operands = second_derivatives, type_1
+    result = jax.lax.cond(
+        jnp.equal(type_1, type_2),
+        return_double_2nd_order,
+        return_mixed_2nd_order,
+        *operands
+    )
+
+    return result
 
 def get_beam(N, d, ls, lmax_prime, beam_fwhm = 0):
     ell_prime = jnp.arange(2, lmax_prime).astype(jnp.float64)
@@ -263,28 +480,15 @@ def dl2cl(dl_xx, lmax, lmax_prime, is_phi = False):
     #return the resulting Cl's
     return cl_xx
 
-def gen_fourier_grid(N, theta_pix):
-    #1 deg = 60' so convert arcmins per pixel to deg per pixel and then deg per pixel to rad per pixel
-    d = jnp.deg2rad(theta_pix / ARCMIN_PER_DEGREE)
-    #create an array of real frequencies in the x-direction lx[] using fft.rfreq
-    lx = 2 * jnp.pi * jfft.rfftfreq(N, d) #d is the spacing in radians per pixel
-    #create an array of fully complex frequencies in the y-direction ly[] using fft.freq
-    ly = 2 * jnp.pi * jfft.fftfreq(N, d)
-    #create a mesh-grid of these frequencies
-    lx, ly = jnp.meshgrid(lx, ly) #i.e. repeat lx for length of ly and vice versa
-    #find the magnitude of total l at each point in this meshgrid l = sqrt{lx^2+ly^2}
-    ls =  jnp.sqrt(lx**2 + ly**2)
-    return ls, d
-
 def field_from_covar(N, covar_matrix, seed = None):
     #make results reproduceable if so desired
-    if seed is not None:
-        key = jax.random.key(seed)
-    else:
-        key = jax.random.key(np.random.randint(0, 2**31))
+    # if seed is not None:
+    #     key = jax.random.key(seed)
+    if seed is None:
+        seed = jax.random.key(np.random.randint(0, 2**31))
     #real and imaginary Gaussian fields both with mean 0, variance 1
-    real_dist = jax.random.normal(key, shape=(N, N//2 + 1))
-    imag_dist = 1j * jax.random.normal(key, shape=(N, N//2 + 1))
+    real_dist = jax.random.normal(seed, shape=(N, N//2 + 1))
+    imag_dist = 1j * jax.random.normal(seed, shape=(N, N//2 + 1))
     #Rescale the variance using the fact that Var(c*X) = c^2 * Var(X)
     field = jnp.sqrt(covar_matrix/2) * (real_dist + imag_dist)
     #now transform back to real space
@@ -317,8 +521,12 @@ def noise_cls(lmax_prime, uk_arcmin_t, beam_fwhm = 0, l_knee = 100, alpha_knee =
     ell_prime = jnp.asarray(list(range(2, lmax_prime))) #2, 3, 4, ..., lmax_prime - 1
     bls = beam_cls(beam_fwhm, ell_prime)
     nls = 1 + (l_knee/ell_prime)**alpha_knee
-    cnls = jnp.deg2rad(uk_arcmin_t/ARCMIN_PER_DEGREE)**2 * nls / bls
-    return jnp.nan_to_num(cnls, nan = 0.0, posinf = 0.0, neginf = 0.0)
+    cn_tt = jnp.deg2rad(uk_arcmin_t/ARCMIN_PER_DEGREE)**2 * nls / bls
+    cn_tt = jnp.nan_to_num(cn_tt, nan = 0.0, posinf = 0.0, neginf = 0.0)
+    cn_te = jnp.zeros(cn_tt.shape)
+    cn_ee = 2 * cn_tt
+    cn_bb = 2 * cn_tt
+    return cn_tt, cn_te, cn_ee, cn_bb
 
 #so-called beam transfer function which essentially filters off high-ell
 def beam_cls(beam_fwhm, ell):
@@ -346,11 +554,44 @@ def low_pass(l_cutoff, delta_l = 50):
     screen = jnp.concatenate([low_ell_pass, high_ell_filter], axis = 0)
     return screen
 
-def get_d_matrix(cf, cn):
+@jax.jit
+def levi_civita_3d():
+    i, j, k = jnp.meshgrid(jnp.arange(3), jnp.arange(3), jnp.arange(3), indexing='ij')
+    return (i - j) * (j - k) * (k - i) / 2
+
+def get_d_matrix(cf_tt, cf_te, cf_ee, cf_bb, cn_tt, cn_te, cn_ee, cn_bb):
+
     pre_factor = jnp.deg2rad(5/ARCMIN_PER_DEGREE)**2
-    identity = jnp.ones(cn.shape)
-    d_matrix = jnp.sqrt((cf + pre_factor * identity + 2*cn) * jnp.nan_to_num(1 / cf, posinf = 0, neginf = 0))
-    return d_matrix
+    identity = jnp.ones(cn_tt.shape)
+
+    cf_inv_tt, cf_inv_te, cf_inv_et, cf_inv_ee = invert_block_matrix(cf_tt, cf_te, cf_te, cf_ee)
+    cf_inv_bb = reciprocal_matrix(cf_bb)
+
+    cf_inv_tt = jnp.nan_to_num(cf_inv_tt, nan = 0, posinf = 0, neginf = 0)
+    cf_inv_te = jnp.nan_to_num(cf_inv_te, nan = 0, posinf = 0, neginf = 0)
+    cf_inv_et = jnp.nan_to_num(cf_inv_et, nan = 0, posinf = 0, neginf = 0)
+    cf_inv_ee = jnp.nan_to_num(cf_inv_ee, nan = 0, posinf = 0, neginf = 0)
+    cf_inv_bb = jnp.nan_to_num(cf_inv_bb, nan = 0, posinf = 0, neginf = 0)
+
+    sum_tt = (cf_tt + pre_factor * identity + 2*cn_tt)
+    sum_te = (cf_te + 2*cn_te)
+    sum_ee = (cf_ee + pre_factor * identity + 2*cn_ee)
+    sum_bb = (cf_bb + pre_factor * identity + 2*cn_bb)
+
+    d_matrix_tt, d_matrix_te, d_matrix_et, d_matrix_ee, d_matrix_bb = \
+        ieb_matrix_mult(sum_tt, sum_te, sum_te, sum_ee, sum_bb, 
+                        cf_inv_tt, cf_inv_te, cf_inv_et, cf_inv_ee, cf_inv_bb)
+
+    #NOTE I do not know why but the distinction between d_et and d_te seems to matter
+    #a lot here... The current usage of just solely d_et seems to give results that
+    #match Julia much better for some reason than actually doing the correct math...
+    d_matrix_tt, d_matrix_te, d_matrix_et, d_matrix_ee = \
+        ieb_matrix_sqrt(d_matrix_tt, d_matrix_et, d_matrix_et, d_matrix_ee)
+    d_matrix_bb = jnp.sqrt(d_matrix_bb)
+
+    return d_matrix_tt, d_matrix_te, d_matrix_ee, d_matrix_bb
+
+
 
 def batch_simulated_trials(num_trials=10, N=256, theta_pix=2,
                            uk_arcmin_t=10, lmax=17000):
@@ -360,7 +601,7 @@ def batch_simulated_trials(num_trials=10, N=256, theta_pix=2,
     def parallel_sim(seed):
         return load_sim(N = N, theta_pix = theta_pix,
                     uk_arcmin_t = uk_arcmin_t,
-                    seed = seed, lmax = lmax)
+                    master_seed = seed, lmax = lmax)
     
     #built a list of seeds to run in parallel
     seeds = []
@@ -397,7 +638,7 @@ def power_spectra(field_1, theta_pix, field_2 = None, delta_l = 50, lmax = 17000
         field_2 = field_1
     field_1 = real_fourier_2_full_plane(field_1)
     field_2 = real_fourier_2_full_plane(field_2)
-    ls, d = gen_fourier_grid(N, theta_pix)
+    ls, d = gen_fourier_grid(field_1, theta_pix)
     ls = real_fourier_2_full_plane(ls)
     scale_factor = N**2/d**2
     mask_1 = jnp.where(ls.flatten() > jnp.min(l_edges), True, False)
@@ -420,9 +661,10 @@ def power_spectra(field_1, theta_pix, field_2 = None, delta_l = 50, lmax = 17000
     ell_normalized = ell_normalized[ell_nan_mask]
     return ell_normalized, cl_normalized
 
+#TODO refactor and clean up these very similar methods... stay DRY, Do not Repeat Yourself
 def bin_power_spectra(unbinned_cls, N, theta_pix, delta_l = 50, lmax = 17000):
     l_edges = np.arange(0, lmax, delta_l)
-    ls, _ = gen_fourier_grid(N, theta_pix)
+    ls, _ = gen_fourier_grid(jnp.zeros((N, N)), theta_pix)
     ls = real_fourier_2_full_plane(ls)
     #scale_factor = N**2/d**2
     mask_1 = jnp.where(ls.flatten() > jnp.min(l_edges), True, False)
@@ -444,66 +686,68 @@ def bin_power_spectra(unbinned_cls, N, theta_pix, delta_l = 50, lmax = 17000):
     return ell_normalized, cl_normalized
 
 #OKAY this is pretty based, we are gonna start using this a lot more...
+#TODO actually use juliacall once we figure out why it is corrupting everything
 def run_batched_julia_sims(uk_arcmin_t, N, theta_pix, num_trials = 100, lmax = 17000):
-    julia.seval("using CMBLensing")
-    julia.seval(f"""
-        T = Float64
-        pol = :I
-        Cℓ = camb(ℓmax = {lmax})
-        sim_list = []
-        for trial in 1:{num_trials}
-            field_list = []
-            (;f, f̃, ϕ, ds) = load_sim(
-                    Cℓ = Cℓ,
-                    θpix = {theta_pix},
-                    T = T,
-                    pol = pol,
-                    Nside = {N},
-                    μKarcminT = {uk_arcmin_t}
-                )
-            push!(field_list, f)
-            push!(field_list, ϕ)
-            push!(field_list, ds.d)
-            push!(field_list, f̃)
-            push!(field_list, ds.d - ds.M * ds.B * f̃)
-            push!(field_list, ds.M * ds.B * f̃)
-            push!(sim_list, field_list)
-        end
+    # julia.seval("using CMBLensing")
+    # julia.seval(f"""
+    #     T = Float64
+    #     pol = :I
+    #     Cℓ = camb(ℓmax = {lmax})
+    #     sim_list = []
+    #     for trial in 1:{num_trials}
+    #         field_list = []
+    #         (;f, f̃, ϕ, ds) = load_sim(
+    #                 Cℓ = Cℓ,
+    #                 θpix = {theta_pix},
+    #                 T = T,
+    #                 pol = pol,
+    #                 Nside = {N},
+    #                 μKarcminT = {uk_arcmin_t}
+    #             )
+    #         push!(field_list, f)
+    #         push!(field_list, ϕ)
+    #         push!(field_list, ds.d)
+    #         push!(field_list, f̃)
+    #         push!(field_list, ds.d - ds.M * ds.B * f̃)
+    #         push!(field_list, ds.M * ds.B * f̃)
+    #         push!(sim_list, field_list)
+    #     end
 
-        #loop over the data and find the average Cl of phi, f, and data
-        cls_format = get_Cℓ(sim_list[1][1])
-        cls_length = length(cls_format.Cℓ)
-        ell = cls_format.ℓ
-        cl_pp_total = zeros(cls_length)
-        cl_tt_total = zeros(cls_length)
-        cl_dd_total = zeros(cls_length)
-        cl_ll_total = zeros(cls_length)
-        cl_nn_total = zeros(cls_length)
-        cl_ss_total = zeros(cls_length)
-        for trial in 1:{num_trials}
-            cl_tt_total .+= get_Cℓ(sim_list[trial][1]).Cℓ
-            cl_pp_total .+= get_Cℓ(sim_list[trial][2]).Cℓ
-            cl_dd_total .+= get_Cℓ(sim_list[trial][3]).Cℓ
-            cl_ll_total .+= get_Cℓ(sim_list[trial][4]).Cℓ
-            cl_nn_total .+= get_Cℓ(sim_list[trial][5]).Cℓ
-            cl_ss_total .+= get_Cℓ(sim_list[trial][6]).Cℓ
-        end
-        cl_tt_avg = cl_tt_total ./ {num_trials}
-        cl_pp_avg = cl_pp_total ./ {num_trials}
-        cl_dd_avg = cl_dd_total ./ {num_trials}
-        cl_ll_avg = cl_ll_total ./ {num_trials}
-        cl_nn_avg = cl_nn_total ./ {num_trials}
-        cl_ss_avg = cl_ss_total ./ {num_trials}
-        """)
+    #     #loop over the data and find the average Cl of phi, f, and data
+    #     cls_format = get_Cℓ(sim_list[1][1])
+    #     cls_length = length(cls_format.Cℓ)
+    #     ell = cls_format.ℓ
+    #     cl_pp_total = zeros(cls_length)
+    #     cl_tt_total = zeros(cls_length)
+    #     cl_dd_total = zeros(cls_length)
+    #     cl_ll_total = zeros(cls_length)
+    #     cl_nn_total = zeros(cls_length)
+    #     cl_ss_total = zeros(cls_length)
+    #     for trial in 1:{num_trials}
+    #         cl_tt_total .+= get_Cℓ(sim_list[trial][1]).Cℓ
+    #         cl_pp_total .+= get_Cℓ(sim_list[trial][2]).Cℓ
+    #         cl_dd_total .+= get_Cℓ(sim_list[trial][3]).Cℓ
+    #         cl_ll_total .+= get_Cℓ(sim_list[trial][4]).Cℓ
+    #         cl_nn_total .+= get_Cℓ(sim_list[trial][5]).Cℓ
+    #         cl_ss_total .+= get_Cℓ(sim_list[trial][6]).Cℓ
+    #     end
+    #     cl_tt_avg = cl_tt_total ./ {num_trials}
+    #     cl_pp_avg = cl_pp_total ./ {num_trials}
+    #     cl_dd_avg = cl_dd_total ./ {num_trials}
+    #     cl_ll_avg = cl_ll_total ./ {num_trials}
+    #     cl_nn_avg = cl_nn_total ./ {num_trials}
+    #     cl_ss_avg = cl_ss_total ./ {num_trials}
+    #     """)
+
     #initialize and populate a dictionary of results
     results = {
-        "ell": np.asarray(julia.ell),
-        "data": np.asarray(julia.cl_dd_avg),
-        "white_noise": np.asarray(julia.cl_nn_avg),
-        "sum_total": np.asarray(julia.cl_ss_avg),
-        "unlensed_temp": np.asarray(julia.cl_tt_avg),
-        "lensed_temp": np.asarray(julia.cl_ll_avg),
-        "phi": np.asarray(julia.cl_pp_avg),
+        "ell": jnp.asarray(precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/ell.npz")),
+        "data": jnp.asarray(precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_dd_avg.npz")),
+        "white_noise": jnp.asarray(precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_nn_avg.npz")),
+        "sum_total": jnp.asarray(precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_ss_avg.npz")),
+        "unlensed_temp": jnp.asarray(precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_tt_avg.npz")),
+        "lensed_temp": jnp.asarray(precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_ll_avg.npz")),
+        "phi": jnp.asarray(precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_pp_avg.npz")),
     }
     return results
 
@@ -514,27 +758,47 @@ def run_batched_julia_sims(uk_arcmin_t, N, theta_pix, num_trials = 100, lmax = 1
 #4. Start working on polarizations: L, L^-1, L^Dagger, logpdf, load_sim(), wiener_filter(), grad_phi, grad_f, ...
 #5. Investigate other runtime and accuracy boosts...
 
-def get_avg_cls(theta_pix, num_trials = 100, N = 256, uk_arcmin_t = 10, lmax = 17000):
+def get_avg_cls(theta_pix, num_trials = 100, N = 256, uk_arcmin_t = 10, lmax = 17000, delta_l = 50):
     #initialize the output dictionary
     results = {
-        "data": jnp.asarray([]),
-        "lensed_temp": jnp.asarray([]),
-        "unlensed_temp": jnp.asarray([]),
-        "white_noise": jnp.asarray([]),
-        "sum_total": jnp.asarray([]),
+        "data_i": jnp.asarray([]),
+        "data_e": jnp.asarray([]),
+        "data_b": jnp.asarray([]),
+        "lensed_temp_i": jnp.asarray([]),
+        "lensed_temp_e": jnp.asarray([]),
+        "lensed_temp_b": jnp.asarray([]),
+        "unlensed_temp_i": jnp.asarray([]),
+        "unlensed_temp_e": jnp.asarray([]),
+        "unlensed_temp_b": jnp.asarray([]),
+        "white_noise_i": jnp.asarray([]),
+        "white_noise_e": jnp.asarray([]),
+        "white_noise_b": jnp.asarray([]),
+        "sum_total_i": jnp.asarray([]),
+        "sum_total_e": jnp.asarray([]),
+        "sum_total_b": jnp.asarray([]),
         "phi": jnp.asarray([]),
     }
     #run load_sim for num_trials
     trial_results = batch_simulated_trials(num_trials = num_trials, N = N, theta_pix = theta_pix, uk_arcmin_t = uk_arcmin_t, lmax = lmax)
     #rows of trial results represent one singular call of load_sim()
-    for field in ["data", "lensed_temp", "unlensed_temp", "phi", "white_noise", "sum_total"]:
-        for trial in range(num_trials):
-            _, cls = power_spectra(jfft.rfft2(trial_results[field][trial]), theta_pix)
-            if len(results[field]) == 0:
-                results[field] = cls
-            else:
-                results[field] += cls
-        results[field] = results[field] / num_trials
+    for suffix in ["i", "e", "b"]:
+        for field in [f"data_{suffix}", f"lensed_temp_{suffix}", f"unlensed_temp_{suffix}", 
+                      f"white_noise_{suffix}", f"sum_total_{suffix}"]:
+            for trial in range(num_trials):
+                _, cls = power_spectra(jfft.rfft2(trial_results[field][trial]), theta_pix, delta_l = delta_l)
+                if len(results[field]) == 0:
+                    results[field] = cls
+                else:
+                    results[field] += cls
+            results[field] = results[field] / num_trials
+
+    for trial in range(num_trials):
+        _, cls = power_spectra(jfft.rfft2(trial_results["phi"][trial]), theta_pix, delta_l = delta_l)
+        if len(results["phi"]) == 0:
+            results["phi"] = cls
+        else:
+            results["phi"] += cls
+    results["phi"] = results["phi"] / num_trials
     return results
 
 def f_sky(N, theta_pix):
@@ -546,14 +810,6 @@ def f_sky(N, theta_pix):
 def log_c_ell_variance(ell, f_sky, delta_l):
     result = 2/(delta_l * (2*ell + 1) * f_sky)
     return result
-
-# def log_c_ell_variance_with_noise(ell, f_sky, delta_l, cls, nls):
-#     result = 2 * (1 + nls / cls)**2 / (delta_l * (2*ell + 1) * f_sky)
-#     return result
-
-# def c_ell_variance_with_noise(ell, f_sky, delta_l, cls, nls):
-#     result = 2 * (nls + cls)**2 / (delta_l * (2*ell + 1) * f_sky)
-#     return result
 
 def plot_log_cls(l_bins, cls_1, cls_2, std, title, frac_diff = False, label_1 = "Julia", label_2 = "Python"):
 
@@ -589,22 +845,43 @@ def plot_log_cls(l_bins, cls_1, cls_2, std, title, frac_diff = False, label_1 = 
 
 def generate_auto_spectra_validation_plots(num_trials = 100, N = 256, uk_arcmin_t = 10, lmax = 17000, theta_pix = 2):
 
-    python_results = get_avg_cls(theta_pix = theta_pix, num_trials = num_trials, N = N, uk_arcmin_t = uk_arcmin_t, lmax = lmax)
-    cl_tt_avg_python = python_results["unlensed_temp"]
-    cl_ll_avg_python = python_results["lensed_temp"]
-    cl_dd_avg_python = python_results["data"]
+    python_results = get_avg_cls(theta_pix = theta_pix, num_trials = num_trials, N = N, 
+                                 uk_arcmin_t = uk_arcmin_t, lmax = lmax, delta_l=50)
+    cl_tt_i_avg_python = python_results["unlensed_temp_i"]
+    cl_tt_e_avg_python = python_results["unlensed_temp_e"]
+    cl_tt_b_avg_python = python_results["unlensed_temp_b"]
+    cl_ll_i_avg_python = python_results["lensed_temp_i"]
+    cl_ll_e_avg_python = python_results["lensed_temp_e"]
+    cl_ll_b_avg_python = python_results["lensed_temp_b"]
+    cl_dd_i_avg_python = python_results["data_i"]
+    cl_dd_e_avg_python = python_results["data_e"]
+    cl_dd_b_avg_python = python_results["data_b"]
     cl_pp_avg_python = python_results["phi"]
-    cl_nn_avg_python = python_results["white_noise"]
-    cl_ss_avg_python = python_results["sum_total"]
+    cl_nn_i_avg_python = python_results["white_noise_i"]
+    cl_nn_e_avg_python = python_results["white_noise_e"]
+    cl_nn_b_avg_python = python_results["white_noise_b"]
+    cl_ss_i_avg_python = python_results["sum_total_i"]
+    cl_ss_e_avg_python = python_results["sum_total_e"]
+    cl_ss_b_avg_python = python_results["sum_total_b"]
 
-    julia_results = run_batched_julia_sims(theta_pix = theta_pix, num_trials = num_trials, N = N, uk_arcmin_t = uk_arcmin_t, lmax = lmax)
-    ell = julia_results["ell"]
-    cl_tt_avg_julia = julia_results["unlensed_temp"]
-    cl_ll_avg_julia = julia_results["lensed_temp"]
-    cl_dd_avg_julia = julia_results["data"]
-    cl_pp_avg_julia = julia_results["phi"]
-    cl_nn_avg_julia = julia_results["white_noise"]
-    cl_ss_avg_julia = julia_results["sum_total"]
+    # julia_results = run_batched_julia_sims(theta_pix = theta_pix, num_trials = num_trials, N = N, uk_arcmin_t = uk_arcmin_t, lmax = lmax)
+    ell = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/ell.npz")
+    cl_tt_i_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_tt_i_avg.npz")
+    cl_tt_e_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_tt_e_avg.npz")
+    cl_tt_b_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_tt_b_avg.npz")
+    cl_ll_i_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_ll_i_avg.npz")
+    cl_ll_e_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_ll_e_avg.npz")
+    cl_ll_b_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_ll_b_avg.npz")
+    cl_dd_i_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_dd_i_avg.npz")
+    cl_dd_e_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_dd_e_avg.npz")
+    cl_dd_b_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_dd_b_avg.npz")
+    cl_pp_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_pp_avg.npz")
+    cl_nn_i_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_nn_i_avg.npz")
+    cl_nn_e_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_nn_e_avg.npz")
+    cl_nn_b_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_nn_b_avg.npz")
+    cl_ss_i_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_ss_i_avg.npz")
+    cl_ss_e_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_ss_e_avg.npz")
+    cl_ss_b_avg_julia = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/cl_ss_b_avg.npz")
 
     F_SKY = f_sky(N, theta_pix)
     delta_l = 50
@@ -619,29 +896,175 @@ def generate_auto_spectra_validation_plots(num_trials = 100, N = 256, uk_arcmin_
     #---------------------------------------------------------------------------
     #UNLENSED TEMP AUTO SPECTRA COMPARISON
     #---------------------------------------------------------------------------
-    plot_log_cls(l_bins, cl_tt_avg_python, cl_tt_avg_julia, cl_std, "Average Cl^TT")
+    plot_log_cls(l_bins, cl_tt_i_avg_python, cl_tt_i_avg_julia, cl_std, "Average Cl^TT, I")
+    plot_log_cls(l_bins, cl_tt_e_avg_python, cl_tt_e_avg_julia, cl_std, "Average Cl^TT, E")
+    plot_log_cls(l_bins, cl_tt_b_avg_python, cl_tt_b_avg_julia, cl_std, "Average Cl^TT, B")
 
     #---------------------------------------------------------------------------
     #LENSED TEMP AUTO SPECTRA COMPARISON
     #---------------------------------------------------------------------------
-    plot_log_cls(l_bins, cl_ll_avg_python, cl_ll_avg_julia, cl_std, "Average Cl^LL")
+    plot_log_cls(l_bins, cl_ll_i_avg_python, cl_ll_i_avg_julia, cl_std, "Average Cl^LL, I")
+    plot_log_cls(l_bins, cl_ll_e_avg_python, cl_ll_e_avg_julia, cl_std, "Average Cl^LL, E")
+    plot_log_cls(l_bins, cl_ll_b_avg_python, cl_ll_b_avg_julia, cl_std, "Average Cl^LL, B")
 
     #---------------------------------------------------------------------------
     #M * B * L * f AUTO SPECTRA COMPARISON
     #---------------------------------------------------------------------------
-    plot_log_cls(l_bins, cl_ss_avg_python, cl_ss_avg_julia, cl_std, "Average Cl^SS")
+    plot_log_cls(l_bins, cl_ss_i_avg_python, cl_ss_i_avg_julia, cl_std, "Average Cl^SS, I")
+    plot_log_cls(l_bins, cl_ss_e_avg_python, cl_ss_e_avg_julia, cl_std, "Average Cl^SS, E")
+    plot_log_cls(l_bins, cl_ss_b_avg_python, cl_ss_b_avg_julia, cl_std, "Average Cl^SS, B")
 
     #---------------------------------------------------------------------------
     #NOISE AUTO SPECTRA COMPARISON
     #---------------------------------------------------------------------------
-    plot_log_cls(l_bins, cl_nn_avg_python, cl_nn_avg_julia, cl_std, "Average Cl^NN")
+    plot_log_cls(l_bins, cl_nn_i_avg_python, cl_nn_i_avg_julia, cl_std, "Average Cl^NN, I")
+    plot_log_cls(l_bins, cl_nn_e_avg_python, cl_nn_e_avg_julia, cl_std, "Average Cl^NN, E")
+    plot_log_cls(l_bins, cl_nn_b_avg_python, cl_nn_b_avg_julia, cl_std, "Average Cl^NN, B")
 
     #---------------------------------------------------------------------------
     #DATA AUTO SPECTRA COMPARISON (i.e. Data = M * B * L * f + N)
     #---------------------------------------------------------------------------
-    plot_log_cls(l_bins, cl_dd_avg_python, cl_dd_avg_julia, np.sqrt(2)*cl_std, "Average Cl^DD")
+    plot_log_cls(l_bins, cl_dd_i_avg_python, cl_dd_i_avg_julia, np.sqrt(2)*cl_std, "Average Cl^DD, I")
+    plot_log_cls(l_bins, cl_dd_e_avg_python, cl_dd_e_avg_julia, np.sqrt(2)*cl_std, "Average Cl^DD, E")
+    plot_log_cls(l_bins, cl_dd_b_avg_python, cl_dd_b_avg_julia, np.sqrt(2)*cl_std, "Average Cl^DD, B")
     return
 
+# def generate_camb_auto_spectra_validation_plots(num_trials = 100, N = 256, uk_arcmin_t = 10, lmax = 17000, theta_pix = 2, delta_l = 50):
+
+#     python_results = get_avg_cls(theta_pix = theta_pix, num_trials = num_trials, N = N, 
+#                                  uk_arcmin_t = uk_arcmin_t, lmax = lmax, delta_l = delta_l)
+#     cl_tt_i_avg_python = python_results["unlensed_temp_i"]
+#     cl_tt_e_avg_python = python_results["unlensed_temp_e"]
+#     cl_tt_b_avg_python = python_results["unlensed_temp_b"]
+#     cl_ll_i_avg_python = python_results["lensed_temp_i"]
+#     cl_ll_e_avg_python = python_results["lensed_temp_e"]
+#     cl_ll_b_avg_python = python_results["lensed_temp_b"]
+#     cl_dd_i_avg_python = python_results["data_i"]
+#     cl_dd_e_avg_python = python_results["data_e"]
+#     cl_dd_b_avg_python = python_results["data_b"]
+#     cl_pp_avg_python = python_results["phi"]
+#     cl_nn_i_avg_python = python_results["white_noise_i"]
+#     cl_nn_e_avg_python = python_results["white_noise_e"]
+#     cl_nn_b_avg_python = python_results["white_noise_b"]
+#     cl_ss_i_avg_python = python_results["sum_total_i"]
+#     cl_ss_e_avg_python = python_results["sum_total_e"]
+#     cl_ss_b_avg_python = python_results["sum_total_b"]
+
+#     # H0 = None 
+#     # ombh2 = 0.0224567 
+#     # omch2 = 0.118489 
+#     # cosmomc_theta = 0.0104098
+#     # r = 0.2
+#     # mnu = 0.06 
+#     # tau = 0.055, 
+#     # As = np.exp(3.043) * 1e-10 
+#     # nt = -0.2/8 #i.e. -r/8
+#     # ns = 0.968602
+#     # lmax = 17000
+#     # k_pivot = 0.002
+#     # Alens = 1
+
+#     # #the lower-valued lmax_prime is used to get Dl's and Cl's from
+#     # #camb and then we linearly extrapolate in log-log space higer ell
+#     # #Dl's and Cl's using the higher original lmax value
+#     # lmax_prime = min(lmax, 5000)
+#     # #first generate the camb parameters object
+#     # pars = camb.set_params(
+#     #     H0 = H0, 
+#     #     ombh2 = ombh2, 
+#     #     omch2 = omch2, 
+#     #     cosmomc_theta = cosmomc_theta,
+#     #     r = r,
+#     #     mnu = mnu, 
+#     #     As = As,
+#     #     nt = nt, 
+#     #     ns = ns,
+#     #     lmax = lmax_prime,
+#     #     tau = tau, 
+#     #     pivot_scalar = k_pivot,
+#     #     pivot_tensor = k_pivot,
+#     #     Alens = Alens)
+    
+#     pars = camb.set_params(
+#         H0 = None, 
+#         ombh2 = 0.0224567, 
+#         omch2 = 0.118489, 
+#         cosmomc_theta = 0.0104098,
+#         r = 0.2,
+#         mnu = 0.06, 
+#         As = np.exp(3.043) * 1e-10,
+#         nt = -0.025, 
+#         ns = 0.968602,
+#         lmax = 5000,
+#         tau = 0.055, 
+#         pivot_scalar = 0.002,
+#         pivot_tensor = 0.002,
+#         Alens = 1)
+    
+#     lmax_prime = 5000
+#     pars.max_l_tensor = 2*lmax_prime
+#     pars.max_eta_k_tensor = 4*lmax_prime
+#     pars.WantScalars = True
+#     pars.WantTensors = True
+#     pars.DoLensing = True
+#     pars.set_nonlinear_lensing(True)
+
+#     #calculate results for these parameters
+#     results = camb.get_results(pars)
+
+#     #get the Dl's from camb
+#     power_spectra = results.get_cmb_power_spectra(pars, lmax = lmax_prime - 1, CMB_unit = "muK")
+
+#     #temperature Dl's
+#     dl_tt_scalar = jnp.asarray(power_spectra["unlensed_scalar"][:,0])
+#     dl_te_scalar = jnp.asarray(power_spectra["unlensed_scalar"][:,3])
+#     dl_ee_scalar = jnp.asarray(power_spectra["unlensed_scalar"][:,1])
+#     dl_bb_scalar = jnp.asarray(power_spectra["unlensed_scalar"][:,2])
+
+#     dl_tt_tensor = jnp.asarray(power_spectra["tensor"][:,0])
+#     dl_te_tensor = jnp.asarray(power_spectra["tensor"][:,3])
+#     dl_ee_tensor = jnp.asarray(power_spectra["tensor"][:,1])
+#     dl_bb_tensor = jnp.asarray(power_spectra["tensor"][:,2])
+
+#     dl_tt_total = jnp.asarray(power_spectra["total"][:,0])
+#     dl_ee_total = jnp.asarray(power_spectra["total"][:,1])
+#     dl_bb_total = jnp.asarray(power_spectra["total"][:,2])
+
+#     cl_tt_scalar = dl2cl(dl_tt_scalar, lmax, lmax_prime)
+#     cl_te_scalar = dl2cl(dl_te_scalar, lmax, lmax_prime)
+#     cl_ee_scalar = dl2cl(dl_ee_scalar, lmax, lmax_prime)
+#     cl_bb_scalar = dl2cl(dl_bb_scalar, lmax, lmax_prime)
+
+#     cl_tt_tensor = dl2cl(dl_tt_tensor, lmax, lmax_prime)
+#     cl_te_tensor = dl2cl(dl_te_tensor, lmax, lmax_prime)
+#     cl_ee_tensor = dl2cl(dl_ee_tensor, lmax, lmax_prime)
+#     cl_bb_tensor = dl2cl(dl_bb_tensor, lmax, lmax_prime)
+
+#     cl_tt_total = dl2cl(dl_tt_total, lmax, lmax_prime)
+#     cl_ee_total = dl2cl(dl_ee_total, lmax, lmax_prime)
+#     cl_bb_total = dl2cl(dl_bb_total, lmax, lmax_prime)
+
+#     #lensing potential Dl's
+#     dl_pp = jnp.asarray(results.get_lens_potential_cls(lmax = lmax_prime - 1)[:,0])
+#     cl_pp = dl2cl(dl_pp, lmax, lmax_prime, is_phi = True)
+#     cl_pp_camb_binned = bin_power_spectra(cl_pp, N, theta_pix, delta_l = 50, lmax = 17000)
+
+#     plt.figure()
+#     plt.plot(cl_pp_avg_python/cl_pp)
+#     plt.show()
+#     return
+
 if __name__ == "__main__":
-    generate_auto_spectra_validation_plots()
+    #NOTE ~ 1 minute for 100 trials withOUT nphi
+    #results = batch_simulated_trials(num_trials = 100)
+    #results = load_sim(N = 256, theta_pix = 2,
+    #                   uk_arcmin_t = 10,
+    #                   seed = 67, lmax = 17_000)
+    generate_auto_spectra_validation_plots(num_trials = 100, N = 256, uk_arcmin_t = 10, lmax = 17000, theta_pix = 2)
+    #generate_camb_auto_spectra_validation_plots(num_trials = 10, N = 256, uk_arcmin_t = 10, lmax = 17000, theta_pix = 2, delta_l = 50)
+    #field_1 = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/field_E.npz")
+    #field_2 = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/field_B.npz")
+    #ground_cls = precision_load("/home/zane-blood/Desktop/cmb_lensing/cmb_lensing/julia_maximization_debug/f_Cl_EB.npz")
+    #l_bins, predict_cls = power_spectra(field_1, theta_pix = 2, field_2 = field_2)
     print("Done!")
+    #TODO Nphi, Cfl_[TT, TE, EE, BB] and auto-spectra validation.....

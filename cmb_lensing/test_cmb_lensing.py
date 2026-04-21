@@ -1,9 +1,9 @@
 #get necessary imports
-from imports import *
-from functions import *
+#from imports import *
+from cmb_lensing.functions import *
 
 #get the current working directory
-cwd = os.getcwd()
+cwd = os.getcwd() + "/cmb_lensing/"
 #Set the threshold for all the 2D percent diff calculations in this file
 PERCENT_DIFF_THRESHOLD = 0.05
 #NOTE The below threshold is WAAYYY too high... 
